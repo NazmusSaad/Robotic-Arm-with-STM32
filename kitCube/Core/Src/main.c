@@ -58,7 +58,7 @@
 
 #define SERVO_LEFT_COUNT 250
 
-#define SERVO_CENTER_COUNT 409
+#define SERVO_CENTER_COUNT 410
 
 #define SERVO_RIGHT_COUNT 550
 
@@ -264,26 +264,168 @@ int main(void)
 
   HAL_Delay(1000);
 
-  // Test Claw motor by opening and closing it a few times
-  for (int i = 0; i < 3; i++) {
-    move_motor_to_angle(CLAW_SERVO_MOTOR, count_to_angle(SERVO_CENTER_COUNT),
-                        current_counts[CLAW_SERVO_MOTOR]);  // Open claw
+  //   // Test Claw motor by opening and closing it a few times
+  //   for (int i = 0; i < 2; i++) {
+  //     move_motor_to_angle(CLAW_SERVO_MOTOR,
+  //     count_to_angle(SERVO_CENTER_COUNT),
+  //                         current_counts[CLAW_SERVO_MOTOR]);  // Open claw
 
-    current_counts[CLAW_SERVO_MOTOR] = (SERVO_CENTER_COUNT);
+  //     current_counts[CLAW_SERVO_MOTOR] = (SERVO_CENTER_COUNT);
 
-    HAL_Delay(500);
+  //     HAL_Delay(500);
 
-    move_motor_to_angle(CLAW_SERVO_MOTOR, count_to_angle(SERVO_LEFT_COUNT),
-                        current_counts[CLAW_SERVO_MOTOR]);  // Close claw
+  //     move_motor_to_angle(CLAW_SERVO_MOTOR, count_to_angle(SERVO_LEFT_COUNT),
+  //                         current_counts[CLAW_SERVO_MOTOR]);  // Close claw
 
-    current_counts[CLAW_SERVO_MOTOR] = (SERVO_LEFT_COUNT);
+  //     current_counts[CLAW_SERVO_MOTOR] = (SERVO_LEFT_COUNT);
 
-    HAL_Delay(500);
-  }
+  //     HAL_Delay(500);
+  //   }
 
-  //
+  //   // test base motor by moving it to left, center, right, center with
+  //   smooth
+  //   // transitions
+  //   move_motor_to_angle(BASE_SERVO_MOTOR, count_to_angle(SERVO_LEFT_COUNT -
+  //   120),
+  //                       current_counts[BASE_SERVO_MOTOR]);  // Move to left
 
-    /* USER CODE END 2 */
+  //   current_counts[BASE_SERVO_MOTOR] = (SERVO_LEFT_COUNT - 120);
+  //   HAL_Delay(500);
+
+  //   //   center is 345 for this motor
+  //   move_motor_to_angle(BASE_SERVO_MOTOR, count_to_angle(SERVO_CENTER_COUNT -
+  //   65),
+  //                       current_counts[BASE_SERVO_MOTOR]);  // Move to center
+  //   current_counts[BASE_SERVO_MOTOR] = (SERVO_CENTER_COUNT - 65);
+  //   HAL_Delay(500);
+  //   move_motor_to_angle(BASE_SERVO_MOTOR, count_to_angle(SERVO_RIGHT_COUNT +
+  //   50),
+  //                       current_counts[BASE_SERVO_MOTOR]);  // Move to right
+  //   current_counts[BASE_SERVO_MOTOR] = (SERVO_RIGHT_COUNT + 50);
+  //   HAL_Delay(500);
+  //   move_motor_to_angle(BASE_SERVO_MOTOR, count_to_angle(SERVO_CENTER_COUNT -
+  //   65),
+  //                       current_counts[BASE_SERVO_MOTOR]);  // Move to center
+  //   current_counts[BASE_SERVO_MOTOR] = (SERVO_CENTER_COUNT - 65);
+  //   HAL_Delay(500);
+
+  //   test arm motor 1 by moving it to left, center, right, center with smooth
+  //   transitions
+  //   move_motor_to_angle(ARM_SERVO_MOTOR1, count_to_angle(SERVO_LEFT_COUNT),
+  //                       current_counts[ARM_SERVO_MOTOR1]);  // Move to left
+  //   current_counts[ARM_SERVO_MOTOR1] = (SERVO_LEFT_COUNT);
+  //   HAL_Delay(500);
+  //   move_motor_to_angle(ARM_SERVO_MOTOR1, count_to_angle(SERVO_CENTER_COUNT),
+  //                       current_counts[ARM_SERVO_MOTOR1]);  // Move to center
+  //   current_counts[ARM_SERVO_MOTOR1] = (SERVO_CENTER_COUNT);
+  //   HAL_Delay(500);
+  //   move_motor_to_angle(ARM_SERVO_MOTOR1, count_to_angle(SERVO_RIGHT_COUNT),
+  //                       current_counts[ARM_SERVO_MOTOR1]);  // Move to right
+  //   current_counts[ARM_SERVO_MOTOR1] = (SERVO_RIGHT_COUNT);
+  //   HAL_Delay(500);
+  //   move_motor_to_angle(ARM_SERVO_MOTOR1, count_to_angle(SERVO_CENTER_COUNT),
+  //                       current_counts[ARM_SERVO_MOTOR1]);  // Move to center
+  //   current_counts[ARM_SERVO_MOTOR1] = (SERVO_CENTER_COUNT);
+  //   HAL_Delay(500);
+
+  //   //   test arm motor 2 by moving it to left, center, right, center with
+  //   smooth
+  //   //   transitions
+  //   move_motor_to_angle(ARM_SERVO_MOTOR2, count_to_angle(SERVO_LEFT_COUNT),
+  //                       current_counts[ARM_SERVO_MOTOR2]);  // Move to left
+  //   current_counts[ARM_SERVO_MOTOR2] = (SERVO_LEFT_COUNT);
+  //   HAL_Delay(500);
+  //   move_motor_to_angle(ARM_SERVO_MOTOR2, count_to_angle(SERVO_CENTER_COUNT),
+  //                       current_counts[ARM_SERVO_MOTOR2]);  // Move to center
+  //   current_counts[ARM_SERVO_MOTOR2] = (SERVO_CENTER_COUNT);
+  //   HAL_Delay(500);
+  //   move_motor_to_angle(ARM_SERVO_MOTOR2, count_to_angle(SERVO_RIGHT_COUNT),
+  //                       current_counts[ARM_SERVO_MOTOR2]);  // Move to right
+  //   current_counts[ARM_SERVO_MOTOR2] = (SERVO_RIGHT_COUNT);
+  //   HAL_Delay(500);
+  //   move_motor_to_angle(ARM_SERVO_MOTOR2, count_to_angle(SERVO_CENTER_COUNT),
+  //                       current_counts[ARM_SERVO_MOTOR2]);  // Move to center
+  //   current_counts[ARM_SERVO_MOTOR2] = (SERVO_CENTER_COUNT);
+  //   HAL_Delay(500);
+
+  // see how far down the arm can go and what we should limit
+  // motor 1 down is 250
+  //   move_motor_to_angle(ARM_SERVO_MOTOR1, count_to_angle(SERVO_LEFT_COUNT),
+  //                       current_counts[ARM_SERVO_MOTOR1]);  // Move to left
+  //   current_counts[ARM_SERVO_MOTOR1] = (SERVO_LEFT_COUNT);
+  //   HAL_Delay(500);
+  //   // motor 2 down is 550
+  //   move_motor_to_angle(ARM_SERVO_MOTOR2, count_to_angle(SERVO_RIGHT_COUNT),
+  //                       current_counts[ARM_SERVO_MOTOR2]);  // Move to right
+  //   current_counts[ARM_SERVO_MOTOR2] = (SERVO_RIGHT_COUNT);
+  //   HAL_Delay(500);
+
+  // simulate fsm.
+  // 1. recieve dummmy IK input (angles from IK)
+  // first target is directly down
+  int target_motor_counts[4] = {SERVO_CENTER_COUNT, SERVO_LEFT_COUNT,
+                                SERVO_RIGHT_COUNT, SERVO_CENTER_COUNT};
+  // 2. move motors to position
+  move_motor_to_angle(BASE_SERVO_MOTOR,
+                      count_to_angle(target_motor_counts[BASE_SERVO_MOTOR]),
+                      current_counts[BASE_SERVO_MOTOR]);  // Move to left
+  current_counts[BASE_SERVO_MOTOR] = (target_motor_counts[BASE_SERVO_MOTOR]);
+  HAL_Delay(500);
+  move_motor_to_angle(ARM_SERVO_MOTOR1,
+                      count_to_angle(target_motor_counts[ARM_SERVO_MOTOR1]),
+                      current_counts[ARM_SERVO_MOTOR1]);  // Move to center
+  current_counts[ARM_SERVO_MOTOR1] = (target_motor_counts[ARM_SERVO_MOTOR1]);
+  HAL_Delay(500);
+  move_motor_to_angle(ARM_SERVO_MOTOR2,
+                      count_to_angle(target_motor_counts[ARM_SERVO_MOTOR2]),
+                      current_counts[ARM_SERVO_MOTOR2]);  // Move to right
+  current_counts[ARM_SERVO_MOTOR2] = (target_motor_counts[ARM_SERVO_MOTOR2]);
+  HAL_Delay(500);
+  // 3. close claw
+  move_motor_to_angle(CLAW_SERVO_MOTOR, count_to_angle(SERVO_LEFT_COUNT),
+                      current_counts[CLAW_SERVO_MOTOR]);  // Close claw
+
+  current_counts[CLAW_SERVO_MOTOR] = (SERVO_LEFT_COUNT);
+
+  HAL_Delay(500);
+  // 4. move to neutral position
+  move_motor_to_angle(BASE_SERVO_MOTOR, count_to_angle(SERVO_CENTER_COUNT),
+                      current_counts[BASE_SERVO_MOTOR]);  // Move to left
+  current_counts[BASE_SERVO_MOTOR] = (SERVO_CENTER_COUNT);
+  HAL_Delay(500);
+  move_motor_to_angle(ARM_SERVO_MOTOR1, count_to_angle(SERVO_CENTER_COUNT),
+                      current_counts[ARM_SERVO_MOTOR1]);  // Move to center
+  current_counts[ARM_SERVO_MOTOR1] = (SERVO_CENTER_COUNT);
+  HAL_Delay(500);
+  move_motor_to_angle(ARM_SERVO_MOTOR2, count_to_angle(SERVO_CENTER_COUNT),
+                      current_counts[ARM_SERVO_MOTOR2]);  // Move to right
+  current_counts[ARM_SERVO_MOTOR2] = (SERVO_CENTER_COUNT);
+  HAL_Delay(500);
+  // 5. move to position above dropoff
+
+  // first dropoff will be to the side and as high as possible to show we can do
+  // different positions than the pickup position
+  move_motor_to_angle(BASE_SERVO_MOTOR, count_to_angle(SERVO_RIGHT_COUNT),
+                      current_counts[BASE_SERVO_MOTOR]);  // Move to left
+  current_counts[BASE_SERVO_MOTOR] = (SERVO_RIGHT_COUNT);
+  HAL_Delay(500);
+  move_motor_to_angle(ARM_SERVO_MOTOR1, count_to_angle(SERVO_RIGHT_COUNT),
+                      current_counts[ARM_SERVO_MOTOR1]);  // Move to the top
+  current_counts[ARM_SERVO_MOTOR1] = (SERVO_RIGHT_COUNT);
+  HAL_Delay(500);
+  move_motor_to_angle(ARM_SERVO_MOTOR2, count_to_angle(SERVO_LEFT_COUNT),
+                      current_counts[ARM_SERVO_MOTOR2]);  // Move to the top
+  current_counts[ARM_SERVO_MOTOR2] = (SERVO_LEFT_COUNT);
+  HAL_Delay(500);
+  // 6. open claw to dropoff
+  move_motor_to_angle(CLAW_SERVO_MOTOR, count_to_angle(SERVO_CENTER_COUNT),
+                      current_counts[CLAW_SERVO_MOTOR]);  // Open claw
+
+  current_counts[CLAW_SERVO_MOTOR] = (SERVO_CENTER_COUNT);
+
+  HAL_Delay(500);
+
+  /* USER CODE END 2 */
 
   /* Infinite loop */
 
