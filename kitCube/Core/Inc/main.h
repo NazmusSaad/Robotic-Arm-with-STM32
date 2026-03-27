@@ -89,6 +89,10 @@ void Error_Handler(void);
 #define TCK_GPIO_Port GPIOA
 #define LD2_Pin GPIO_PIN_7
 #define LD2_GPIO_Port GPIOB
+#define J1_SW_Pin GPIO_PIN_2
+#define J1_SW_GPIO_Port GPIOE
+#define J2_SW_Pin GPIO_PIN_3
+#define J2_SW_GPIO_Port GPIOE
 
 /* USER CODE BEGIN Private defines */
 

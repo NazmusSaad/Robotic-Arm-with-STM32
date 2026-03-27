@@ -38,6 +38,11 @@
 
 #include "main.h"
 
+#include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
 /* Private includes ----------------------------------------------------------*/
 
 /* USER CODE BEGIN Includes */
@@ -72,6 +77,97 @@
 
 /* USER CODE END PD */
 
+I2C_HandleTypeDef hi2c2;
+
+UART_HandleTypeDef huart3;
+
+ADC_HandleTypeDef hadc1;
+
+PCD_HandleTypeDef hpcd_USB_OTG_FS;
+
+// Joystick code
+#define J1_X_CHANNEL ADC_CHANNEL_0  // PA0
+#define J1_Y_CHANNEL ADC_CHANNEL_1  // PA1
+#define J2_X_CHANNEL ADC_CHANNEL_4  // PA4
+#define J2_Y_CHANNEL ADC_CHANNEL_5  // PA5
+
+#define JOY_CENTER 2048
+#define JOY_DEADZONE 180
+#define JOY_MIN 0
+#define JOY_MAX 4095
+
+typedef struct {
+  uint16_t x_raw;
+  uint16_t y_raw;
+  int x_norm;
+  int y_norm;
+  uint8_t button;  // 1 = pressed, 0 = not pressed
+} JoystickState;
+
+uint16_t Joystick_ReadADC(uint32_t channel);
+int Joystick_Normalize(uint16_t raw);
+void Joystick_Read(JoystickState* js, uint32_t x_channel, uint32_t y_channel,
+                   GPIO_TypeDef* sw_port, uint16_t sw_pin);
+void Joystick_Print(const JoystickState* j1, const JoystickState* j2);
+
+uint16_t Joystick_ReadADC(uint32_t channel) {
+  ADC_ChannelConfTypeDef sConfig = {0};
+
+  sConfig.Channel = channel;
+  sConfig.Rank = 1;
+  sConfig.SamplingTime = ADC_SAMPLETIME_84CYCLES;
+
+  if (HAL_ADC_ConfigChannel(&hadc1, &sConfig) != HAL_OK) {
+    return 0;
+  }
+
+  HAL_ADC_Start(&hadc1);
+
+  if (HAL_ADC_PollForConversion(&hadc1, 10) != HAL_OK) {
+    HAL_ADC_Stop(&hadc1);
+    return 0;
+  }
+
+  uint16_t value = (uint16_t)HAL_ADC_GetValue(&hadc1);
+  HAL_ADC_Stop(&hadc1);
+
+  return value;
+}
+
+int Joystick_Normalize(uint16_t raw) {
+  int val = (int)raw - JOY_CENTER;
+
+  if (abs(val) < JOY_DEADZONE) {
+    return 0;
+  }
+
+  return val;
+}
+
+void Joystick_Read(JoystickState* js, uint32_t x_channel, uint32_t y_channel,
+                   GPIO_TypeDef* sw_port, uint16_t sw_pin) {
+  js->x_raw = Joystick_ReadADC(x_channel);
+  js->y_raw = Joystick_ReadADC(y_channel);
+
+  js->x_norm = Joystick_Normalize(js->x_raw);
+  js->y_norm = Joystick_Normalize(js->y_raw);
+
+  // Active low button because GPIO pull-up is enabled
+  js->button = (HAL_GPIO_ReadPin(sw_port, sw_pin) == GPIO_PIN_RESET) ? 1 : 0;
+}
+
+void Joystick_Print(const JoystickState* j1, const JoystickState* j2) {
+  char msg[200];
+
+  int len = snprintf(msg, sizeof(msg),
+                     "J1: X=%4u Y=%4u Xn=%5d Yn=%5d Btn=%d | "
+                     "J2: X=%4u Y=%4u Xn=%5d Yn=%5d Btn=%d\r\n",
+                     j1->x_raw, j1->y_raw, j1->x_norm, j1->y_norm, j1->button,
+                     j2->x_raw, j2->y_raw, j2->x_norm, j2->y_norm, j2->button);
+
+  HAL_UART_Transmit(&huart3, (uint8_t*)msg, len, HAL_MAX_DELAY);
+}
+
 /* Private macro -------------------------------------------------------------*/
 
 /* USER CODE BEGIN PM */
@@ -79,12 +175,6 @@
 /* USER CODE END PM */
 
 /* Private variables ---------------------------------------------------------*/
-
-I2C_HandleTypeDef hi2c2;
-
-UART_HandleTypeDef huart3;
-
-PCD_HandleTypeDef hpcd_USB_OTG_FS;
 
 /* USER CODE BEGIN PV */
 
@@ -101,6 +191,8 @@ static void MX_I2C2_Init(void);
 static void MX_USART3_UART_Init(void);
 
 static void MX_USB_OTG_FS_PCD_Init(void);
+
+static void MX_ADC1_Init(void);
 
 /* USER CODE BEGIN PFP */
 
@@ -193,6 +285,8 @@ int main(void)
 
   MX_USB_OTG_FS_PCD_Init();
 
+  MX_ADC1_Init();
+
   /* USER CODE BEGIN 2 */
 
   HAL_StatusTypeDef status;
@@ -246,184 +340,23 @@ int main(void)
   print_msg("PCA9685 PWM frequency set to 50 Hz for servos\r\n");
 
   // To track current counts for each motor so we can do smooth transitions
-  int current_counts[4] = {SERVO_CENTER_COUNT, SERVO_CENTER_COUNT,
+  int current_counts[4] = {SERVO_CENTER_COUNT + 65, SERVO_CENTER_COUNT,
                            SERVO_CENTER_COUNT, SERVO_CENTER_COUNT};
 
   // Step 0: Ensure we start perfectly at center instantly so we have a known
   // baseline
 
-  PCA9685_SetServoPulseCounts(&hi2c2, current_counts[0], SERVO_CENTER_COUNT);
+  PCA9685_SetServoPulseCounts(&hi2c2, 0, current_counts[0]);
 
-  PCA9685_SetServoPulseCounts(&hi2c2, current_counts[1], SERVO_CENTER_COUNT);
+  PCA9685_SetServoPulseCounts(&hi2c2, 1, current_counts[1]);
 
-  PCA9685_SetServoPulseCounts(&hi2c2, current_counts[2], SERVO_CENTER_COUNT);
+  PCA9685_SetServoPulseCounts(&hi2c2, 2, current_counts[2]);
 
-  PCA9685_SetServoPulseCounts(&hi2c2, current_counts[3], SERVO_CENTER_COUNT);
+  PCA9685_SetServoPulseCounts(&hi2c2, 3, current_counts[3]);
 
   print_msg("Servos locked securely at neutral position\r\n");
 
   HAL_Delay(1000);
-
-  //   // Test Claw motor by opening and closing it a few times
-  //   for (int i = 0; i < 2; i++) {
-  //     move_motor_to_angle(CLAW_SERVO_MOTOR,
-  //     count_to_angle(SERVO_CENTER_COUNT),
-  //                         current_counts[CLAW_SERVO_MOTOR]);  // Open claw
-
-  //     current_counts[CLAW_SERVO_MOTOR] = (SERVO_CENTER_COUNT);
-
-  //     HAL_Delay(500);
-
-  //     move_motor_to_angle(CLAW_SERVO_MOTOR, count_to_angle(SERVO_LEFT_COUNT),
-  //                         current_counts[CLAW_SERVO_MOTOR]);  // Close claw
-
-  //     current_counts[CLAW_SERVO_MOTOR] = (SERVO_LEFT_COUNT);
-
-  //     HAL_Delay(500);
-  //   }
-
-  //   // test base motor by moving it to left, center, right, center with
-  //   smooth
-  //   // transitions
-  //   move_motor_to_angle(BASE_SERVO_MOTOR, count_to_angle(SERVO_LEFT_COUNT -
-  //   120),
-  //                       current_counts[BASE_SERVO_MOTOR]);  // Move to left
-
-  //   current_counts[BASE_SERVO_MOTOR] = (SERVO_LEFT_COUNT - 120);
-  //   HAL_Delay(500);
-
-  //   //   center is 345 for this motor
-  //   move_motor_to_angle(BASE_SERVO_MOTOR, count_to_angle(SERVO_CENTER_COUNT -
-  //   65),
-  //                       current_counts[BASE_SERVO_MOTOR]);  // Move to center
-  //   current_counts[BASE_SERVO_MOTOR] = (SERVO_CENTER_COUNT - 65);
-  //   HAL_Delay(500);
-  //   move_motor_to_angle(BASE_SERVO_MOTOR, count_to_angle(SERVO_RIGHT_COUNT +
-  //   50),
-  //                       current_counts[BASE_SERVO_MOTOR]);  // Move to right
-  //   current_counts[BASE_SERVO_MOTOR] = (SERVO_RIGHT_COUNT + 50);
-  //   HAL_Delay(500);
-  //   move_motor_to_angle(BASE_SERVO_MOTOR, count_to_angle(SERVO_CENTER_COUNT -
-  //   65),
-  //                       current_counts[BASE_SERVO_MOTOR]);  // Move to center
-  //   current_counts[BASE_SERVO_MOTOR] = (SERVO_CENTER_COUNT - 65);
-  //   HAL_Delay(500);
-
-  //   test arm motor 1 by moving it to left, center, right, center with smooth
-  //   transitions
-  //   move_motor_to_angle(ARM_SERVO_MOTOR1, count_to_angle(SERVO_LEFT_COUNT),
-  //                       current_counts[ARM_SERVO_MOTOR1]);  // Move to left
-  //   current_counts[ARM_SERVO_MOTOR1] = (SERVO_LEFT_COUNT);
-  //   HAL_Delay(500);
-  //   move_motor_to_angle(ARM_SERVO_MOTOR1, count_to_angle(SERVO_CENTER_COUNT),
-  //                       current_counts[ARM_SERVO_MOTOR1]);  // Move to center
-  //   current_counts[ARM_SERVO_MOTOR1] = (SERVO_CENTER_COUNT);
-  //   HAL_Delay(500);
-  //   move_motor_to_angle(ARM_SERVO_MOTOR1, count_to_angle(SERVO_RIGHT_COUNT),
-  //                       current_counts[ARM_SERVO_MOTOR1]);  // Move to right
-  //   current_counts[ARM_SERVO_MOTOR1] = (SERVO_RIGHT_COUNT);
-  //   HAL_Delay(500);
-  //   move_motor_to_angle(ARM_SERVO_MOTOR1, count_to_angle(SERVO_CENTER_COUNT),
-  //                       current_counts[ARM_SERVO_MOTOR1]);  // Move to center
-  //   current_counts[ARM_SERVO_MOTOR1] = (SERVO_CENTER_COUNT);
-  //   HAL_Delay(500);
-
-  //   //   test arm motor 2 by moving it to left, center, right, center with
-  //   smooth
-  //   //   transitions
-  //   move_motor_to_angle(ARM_SERVO_MOTOR2, count_to_angle(SERVO_LEFT_COUNT),
-  //                       current_counts[ARM_SERVO_MOTOR2]);  // Move to left
-  //   current_counts[ARM_SERVO_MOTOR2] = (SERVO_LEFT_COUNT);
-  //   HAL_Delay(500);
-  //   move_motor_to_angle(ARM_SERVO_MOTOR2, count_to_angle(SERVO_CENTER_COUNT),
-  //                       current_counts[ARM_SERVO_MOTOR2]);  // Move to center
-  //   current_counts[ARM_SERVO_MOTOR2] = (SERVO_CENTER_COUNT);
-  //   HAL_Delay(500);
-  //   move_motor_to_angle(ARM_SERVO_MOTOR2, count_to_angle(SERVO_RIGHT_COUNT),
-  //                       current_counts[ARM_SERVO_MOTOR2]);  // Move to right
-  //   current_counts[ARM_SERVO_MOTOR2] = (SERVO_RIGHT_COUNT);
-  //   HAL_Delay(500);
-  //   move_motor_to_angle(ARM_SERVO_MOTOR2, count_to_angle(SERVO_CENTER_COUNT),
-  //                       current_counts[ARM_SERVO_MOTOR2]);  // Move to center
-  //   current_counts[ARM_SERVO_MOTOR2] = (SERVO_CENTER_COUNT);
-  //   HAL_Delay(500);
-
-  // see how far down the arm can go and what we should limit
-  // motor 1 down is 250
-  //   move_motor_to_angle(ARM_SERVO_MOTOR1, count_to_angle(SERVO_LEFT_COUNT),
-  //                       current_counts[ARM_SERVO_MOTOR1]);  // Move to left
-  //   current_counts[ARM_SERVO_MOTOR1] = (SERVO_LEFT_COUNT);
-  //   HAL_Delay(500);
-  //   // motor 2 down is 550
-  //   move_motor_to_angle(ARM_SERVO_MOTOR2, count_to_angle(SERVO_RIGHT_COUNT),
-  //                       current_counts[ARM_SERVO_MOTOR2]);  // Move to right
-  //   current_counts[ARM_SERVO_MOTOR2] = (SERVO_RIGHT_COUNT);
-  //   HAL_Delay(500);
-
-  // simulate fsm.
-  // 1. recieve dummmy IK input (angles from IK)
-  // first target is directly down
-  int target_motor_counts[4] = {SERVO_CENTER_COUNT, SERVO_LEFT_COUNT,
-                                SERVO_RIGHT_COUNT, SERVO_CENTER_COUNT};
-  // 2. move motors to position
-  move_motor_to_angle(BASE_SERVO_MOTOR,
-                      count_to_angle(target_motor_counts[BASE_SERVO_MOTOR]),
-                      current_counts[BASE_SERVO_MOTOR]);  // Move to left
-  current_counts[BASE_SERVO_MOTOR] = (target_motor_counts[BASE_SERVO_MOTOR]);
-  HAL_Delay(500);
-  move_motor_to_angle(ARM_SERVO_MOTOR1,
-                      count_to_angle(target_motor_counts[ARM_SERVO_MOTOR1]),
-                      current_counts[ARM_SERVO_MOTOR1]);  // Move to center
-  current_counts[ARM_SERVO_MOTOR1] = (target_motor_counts[ARM_SERVO_MOTOR1]);
-  HAL_Delay(500);
-  move_motor_to_angle(ARM_SERVO_MOTOR2,
-                      count_to_angle(target_motor_counts[ARM_SERVO_MOTOR2]),
-                      current_counts[ARM_SERVO_MOTOR2]);  // Move to right
-  current_counts[ARM_SERVO_MOTOR2] = (target_motor_counts[ARM_SERVO_MOTOR2]);
-  HAL_Delay(500);
-  // 3. close claw
-  move_motor_to_angle(CLAW_SERVO_MOTOR, count_to_angle(SERVO_LEFT_COUNT),
-                      current_counts[CLAW_SERVO_MOTOR]);  // Close claw
-
-  current_counts[CLAW_SERVO_MOTOR] = (SERVO_LEFT_COUNT);
-
-  HAL_Delay(500);
-  // 4. move to neutral position
-  move_motor_to_angle(BASE_SERVO_MOTOR, count_to_angle(SERVO_CENTER_COUNT),
-                      current_counts[BASE_SERVO_MOTOR]);  // Move to left
-  current_counts[BASE_SERVO_MOTOR] = (SERVO_CENTER_COUNT);
-  HAL_Delay(500);
-  move_motor_to_angle(ARM_SERVO_MOTOR1, count_to_angle(SERVO_CENTER_COUNT),
-                      current_counts[ARM_SERVO_MOTOR1]);  // Move to center
-  current_counts[ARM_SERVO_MOTOR1] = (SERVO_CENTER_COUNT);
-  HAL_Delay(500);
-  move_motor_to_angle(ARM_SERVO_MOTOR2, count_to_angle(SERVO_CENTER_COUNT),
-                      current_counts[ARM_SERVO_MOTOR2]);  // Move to right
-  current_counts[ARM_SERVO_MOTOR2] = (SERVO_CENTER_COUNT);
-  HAL_Delay(500);
-  // 5. move to position above dropoff
-
-  // first dropoff will be to the side and as high as possible to show we can do
-  // different positions than the pickup position
-  move_motor_to_angle(BASE_SERVO_MOTOR, count_to_angle(SERVO_RIGHT_COUNT),
-                      current_counts[BASE_SERVO_MOTOR]);  // Move to left
-  current_counts[BASE_SERVO_MOTOR] = (SERVO_RIGHT_COUNT);
-  HAL_Delay(500);
-  move_motor_to_angle(ARM_SERVO_MOTOR1, count_to_angle(SERVO_RIGHT_COUNT),
-                      current_counts[ARM_SERVO_MOTOR1]);  // Move to the top
-  current_counts[ARM_SERVO_MOTOR1] = (SERVO_RIGHT_COUNT);
-  HAL_Delay(500);
-  move_motor_to_angle(ARM_SERVO_MOTOR2, count_to_angle(SERVO_LEFT_COUNT),
-                      current_counts[ARM_SERVO_MOTOR2]);  // Move to the top
-  current_counts[ARM_SERVO_MOTOR2] = (SERVO_LEFT_COUNT);
-  HAL_Delay(500);
-  // 6. open claw to dropoff
-  move_motor_to_angle(CLAW_SERVO_MOTOR, count_to_angle(SERVO_CENTER_COUNT),
-                      current_counts[CLAW_SERVO_MOTOR]);  // Open claw
-
-  current_counts[CLAW_SERVO_MOTOR] = (SERVO_CENTER_COUNT);
-
-  HAL_Delay(500);
 
   /* USER CODE END 2 */
 
@@ -431,10 +364,20 @@ int main(void)
 
   /* USER CODE BEGIN WHILE */
 
+  JoystickState joy1 = {0};
+  JoystickState joy2 = {0};
+
   while (1)
 
   {
-    HAL_Delay(1000);
+    Joystick_Read(&joy1, J1_X_CHANNEL, J1_Y_CHANNEL, J1_SW_GPIO_Port,
+                  J1_SW_Pin);
+    Joystick_Read(&joy2, J2_X_CHANNEL, J2_Y_CHANNEL, J2_SW_GPIO_Port,
+                  J2_SW_Pin);
+
+    Joystick_Print(&joy1, &joy2);
+
+    HAL_Delay(80000);
 
     /* USER CODE END WHILE */
 
@@ -618,6 +561,35 @@ static void MX_USART3_UART_Init(void)
   /* USER CODE END USART3_Init 2 */
 }
 
+static void MX_ADC1_Init(void) {
+  ADC_ChannelConfTypeDef sConfig = {0};
+
+  hadc1.Instance = ADC1;
+  hadc1.Init.ClockPrescaler = ADC_CLOCKPRESCALER_PCLK_DIV4;
+  hadc1.Init.Resolution = ADC_RESOLUTION12b;
+  hadc1.Init.ScanConvMode = DISABLE;
+  hadc1.Init.ContinuousConvMode = DISABLE;
+  hadc1.Init.DiscontinuousConvMode = DISABLE;
+  hadc1.Init.ExternalTrigConvEdge = ADC_EXTERNALTRIG_EDGE_NONE;
+  hadc1.Init.ExternalTrigConv = ADC_SOFTWARE_START;
+  hadc1.Init.DataAlign = ADC_DATAALIGN_RIGHT;
+  hadc1.Init.NbrOfConversion = 1;
+  hadc1.Init.DMAContinuousRequests = DISABLE;
+  hadc1.Init.EOCSelection = EOC_SINGLE_CONV;
+
+  if (HAL_ADC_Init(&hadc1) != HAL_OK) {
+    Error_Handler();
+  }
+
+  sConfig.Channel = ADC_CHANNEL_0;
+  sConfig.Rank = 1;
+  sConfig.SamplingTime = ADC_SAMPLETIME_84CYCLES;
+
+  if (HAL_ADC_ConfigChannel(&hadc1, &sConfig) != HAL_OK) {
+    Error_Handler();
+  }
+}
+
 /**
 
  * @brief USB_OTG_FS Initialization Function
@@ -705,6 +677,8 @@ static void MX_GPIO_Init(void)
 
   __HAL_RCC_GPIOA_CLK_ENABLE();
 
+  __HAL_RCC_GPIOE_CLK_ENABLE();
+
   /*Configure GPIO pin Output Level */
 
   HAL_GPIO_WritePin(GPIOB, LD1_Pin | LD3_Pin | LD2_Pin, GPIO_PIN_RESET);
@@ -757,6 +731,12 @@ static void MX_GPIO_Init(void)
   GPIO_InitStruct.Pull = GPIO_NOPULL;
 
   HAL_GPIO_Init(USB_OverCurrent_GPIO_Port, &GPIO_InitStruct);
+
+  /*Configure GPIO pins : J1_SW_Pin J2_SW_Pin */
+  GPIO_InitStruct.Pin = J1_SW_Pin | J2_SW_Pin;
+  GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
+  GPIO_InitStruct.Pull = GPIO_PULLUP;
+  HAL_GPIO_Init(GPIOE, &GPIO_InitStruct);
 
   /* USER CODE BEGIN MX_GPIO_Init_2 */
 
