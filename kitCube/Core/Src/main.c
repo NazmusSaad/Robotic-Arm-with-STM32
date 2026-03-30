@@ -38,6 +38,7 @@
 
 #include "main.h"
 
+#include <math.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -61,11 +62,106 @@
 
 /* USER CODE BEGIN PD */
 
-#define SERVO_LEFT_COUNT 250
+typedef struct {
+  int current_count;
+  int min_count;
+  int center_count;
+  int max_count;
+  uint8_t reversed;
+  const char* name;
+} ServoConfig;
 
-#define SERVO_CENTER_COUNT 410
+typedef struct {
+  float base_deg;
+  float shoulder_deg;
+  float elbow_deg;
+} IKAngles;
 
-#define SERVO_RIGHT_COUNT 550
+typedef struct {
+  int base_count;
+  int shoulder_count;
+  int elbow_count;
+} JointCounts;
+/* USER CODE END PTD */
+
+/* Private define ------------------------------------------------------------*/
+/* USER CODE BEGIN PD */
+
+/* Servo channels on PCA9685 */
+#define BASE_SERVO_MOTOR 0
+#define ARM_SERVO_MOTOR1 1 /* Shoulder */
+#define ARM_SERVO_MOTOR2 2 /* Elbow */
+#define CLAW_SERVO_MOTOR 3
+
+/* Final ROM values */
+#define BASE_MIN_COUNT 200
+#define BASE_CENTER_COUNT 450
+#define BASE_MAX_COUNT 620
+
+#define ARM1_MIN_COUNT 220
+#define ARM1_CENTER_COUNT 410
+#define ARM1_MAX_COUNT 600
+
+#define ARM2_MIN_COUNT 220
+#define ARM2_CENTER_COUNT 410
+#define ARM2_MAX_COUNT 620
+
+#define CLAW_MIN_COUNT 290 /* close */
+#define CLAW_CENTER_COUNT 410
+#define CLAW_MAX_COUNT 470 /* open */
+
+/* Smooth motion timing */
+#define MOTION_DT_MS 20.0f
+#define DEFAULT_MAX_SPEED_CPS 120.0f
+#define DEFAULT_ACCEL_CPS2 240.0f
+
+/* Pause times */
+#define SHORT_SETTLE_MS 600
+#define LONG_SETTLE_MS 1200
+
+/* Workspace / geometry */
+#define PAPER_WIDTH_CM 25.0f
+#define PAPER_HEIGHT_CM 20.0f
+
+/* Robot base axis in workspace coordinates */
+#define BASE_X_CM 13.0f
+#define BASE_Y_CM -12.8f
+#define BASE_Z_CM 3.0f
+
+/* Shoulder pivot height above paper */
+#define SHOULDER_Z_CM 15.0f
+
+/* Effective link lengths */
+#define LINK1_CM 8.3f
+#define LINK2_CM 13.0f
+
+/* Hardcoded test points */
+#define PICK_X_CM 3.0f
+#define PICK_Y_CM 3.0f
+#define DROP_X_CM 21.0f
+#define DROP_Y_CM 3.0f
+
+/* Heights above paper */
+#define APPROACH_Z_CM 3.0f
+#define GRASP_Z_CM 0.5f
+
+/* First-pass logical angle spans */
+#define BASE_MIN_DEG -90.0f
+#define BASE_MAX_DEG 90.0f
+
+#define SHOULDER_MIN_DEG -70.0f
+#define SHOULDER_MAX_DEG 70.0f
+
+#define ELBOW_MIN_DEG -80.0f
+#define ELBOW_MAX_DEG 80.0f
+
+/* Neutral absolute/reference assumptions */
+#define BASE_FORWARD_ABS_DEG 0.0f
+#define SHOULDER_NEUTRAL_ABS_DEG -70.0f
+#define ELBOW_NEUTRAL_REL_DEG 110.0f
+
+#define REACH_MARGIN_CM 0.3f
+#define CLAMP_UNREACHABLE_TARGETS 1
 
 #define BASE_SERVO_MOTOR 0
 
@@ -84,6 +180,19 @@ UART_HandleTypeDef huart3;
 ADC_HandleTypeDef hadc1;
 
 PCD_HandleTypeDef hpcd_USB_OTG_FS;
+
+ServoConfig servos[4] = {{BASE_CENTER_COUNT, BASE_MIN_COUNT, BASE_CENTER_COUNT,
+                          BASE_MAX_COUNT, 0, "Base Servo"},
+                         {ARM1_CENTER_COUNT, ARM1_MIN_COUNT, ARM1_CENTER_COUNT,
+                          ARM1_MAX_COUNT, 0, "Shoulder Servo"},
+                         {ARM2_CENTER_COUNT, ARM2_MIN_COUNT, ARM2_CENTER_COUNT,
+                          ARM2_MAX_COUNT, 0, "Elbow Servo"},
+                         {CLAW_CENTER_COUNT, CLAW_MIN_COUNT, CLAW_CENTER_COUNT,
+                          CLAW_MAX_COUNT, 0, "Claw Servo"}};
+
+#ifndef M_PI
+#define M_PI 3.14159265358979323846
+#endif
 
 // Joystick code
 #define J1_X_CHANNEL ADC_CHANNEL_0  // PA0
@@ -200,43 +309,255 @@ static void MX_ADC1_Init(void);
 
 /* Private user code ---------------------------------------------------------*/
 
+void print_status_and_halt(const char* msg);
+int clamp_int(int value, int min_value, int max_value);
+float clamp_float(float value, float min_value, float max_value);
+float deg_to_rad(float deg);
+float rad_to_deg(float rad);
+
+int servo_limit_count(int channel, int raw_count);
+int servo_apply_direction(int channel, int logical_count);
+HAL_StatusTypeDef servo_write_count(int channel, int logical_count);
+void servo_write_all_centers(void);
+
+void move_servo_smooth_trapezoid(int channel, int target_count,
+                                 float max_speed_cps, float accel_cps2);
+
+int logical_angle_deg_to_count(int channel, float logical_angle_deg);
+float count_to_logical_angle_deg(int channel, int count);
+
+void move_arm_counts(int base_count, int shoulder_count, int elbow_count);
+void claw_open(void);
+void claw_close(void);
+
 /* USER CODE BEGIN 0 */
 
 void print_msg(char* msg) {
   HAL_UART_Transmit(&huart3, (uint8_t*)msg, strlen(msg), 100);
 }
 
-// function to get the offcount value for the pwm based on the desired servo
-// angle
+void print_status_and_halt(const char* msg) {
+  print_msg(msg);
+  HAL_GPIO_WritePin(LD1_GPIO_Port, LD1_Pin, GPIO_PIN_SET);
+  __disable_irq();
+  while (1) {
+  }
+}
 
-int angle_to_count(int angle) { return angle * 3.28 + 409; }
+int clamp_int(int value, int min_value, int max_value) {
+  if (value < min_value) return min_value;
+  if (value > max_value) return max_value;
+  return value;
+}
 
-int count_to_angle(int count) { return (count - 409) / 3.28; }
+float clamp_float(float value, float min_value, float max_value) {
+  if (value < min_value) return min_value;
+  if (value > max_value) return max_value;
+  return value;
+}
 
-// function to move a motor to a specific angle in a smooth manner
-void move_motor_to_angle(int motor_channel, int angle, int current_count) {
-  int target_count =
-      angle * 3.28 +
-      409;  // Convert angle to count using the same formula as angle_to_count
+float deg_to_rad(float deg) { return deg * ((float)M_PI / 180.0f); }
 
-  if (target_count < current_count) {
-    // Move smoothly downwards
+float rad_to_deg(float rad) { return rad * (180.0f / (float)M_PI); }
 
-    for (int i = current_count; i >= target_count; i--) {
-      PCA9685_SetServoPulseCounts(&hi2c2, motor_channel, i);
+int servo_limit_count(int channel, int raw_count) {
+  return clamp_int(raw_count, servos[channel].min_count,
+                   servos[channel].max_count);
+}
 
-      HAL_Delay(25);  // Adjust delay for smoother or faster movement
+/* If a servo goes the wrong way on hardware, set reversed = 1 in servos[] */
+int servo_apply_direction(int channel, int logical_count) {
+  ServoConfig* s = &servos[channel];
+  int limited = servo_limit_count(channel, logical_count);
+
+  if (!s->reversed) {
+    return limited;
+  }
+
+  return s->center_count - (limited - s->center_count);
+}
+
+HAL_StatusTypeDef servo_write_count(int channel, int logical_count) {
+  int physical_count = servo_apply_direction(channel, logical_count);
+  return PCA9685_SetServoPulseCounts(&hi2c2, channel, physical_count);
+}
+
+void move_servo_smooth_trapezoid(int channel, int target_count,
+                                 float max_speed_cps, float accel_cps2) {
+  char msg[128];
+
+  ServoConfig* s = &servos[channel];
+  const float dt_s = MOTION_DT_MS / 1000.0f;
+
+  const int start_count = s->current_count;
+  const int final_target = servo_limit_count(channel, target_count);
+  const int delta = final_target - start_count;
+
+  if (delta == 0) {
+    return;
+  }
+
+  const float direction = (delta > 0) ? 1.0f : -1.0f;
+  const float distance = fabsf((float)delta);
+
+  if (max_speed_cps <= 0.0f) max_speed_cps = DEFAULT_MAX_SPEED_CPS;
+  if (accel_cps2 <= 0.0f) accel_cps2 = DEFAULT_ACCEL_CPS2;
+
+  float t_accel = max_speed_cps / accel_cps2;
+  float d_accel = 0.5f * accel_cps2 * t_accel * t_accel;
+
+  float t_cruise = 0.0f;
+  float total_time = 0.0f;
+  float peak_speed = max_speed_cps;
+
+  if (2.0f * d_accel >= distance) {
+    t_accel = sqrtf(distance / accel_cps2);
+    d_accel = 0.5f * accel_cps2 * t_accel * t_accel;
+    t_cruise = 0.0f;
+    peak_speed = accel_cps2 * t_accel;
+    total_time = 2.0f * t_accel;
+  } else {
+    float d_cruise = distance - 2.0f * d_accel;
+    t_cruise = d_cruise / max_speed_cps;
+    total_time = 2.0f * t_accel + t_cruise;
+  }
+
+  snprintf(msg, sizeof(msg), "\r\n%s: %d -> %d\r\n", s->name, start_count,
+           final_target);
+  print_msg(msg);
+
+  float t = 0.0f;
+  int last_sent = start_count;
+
+  while (t < total_time) {
+    float pos = 0.0f;
+
+    if (t < t_accel) {
+      pos = 0.5f * accel_cps2 * t * t;
+    } else if (t < (t_accel + t_cruise)) {
+      float tc = t - t_accel;
+      pos = d_accel + peak_speed * tc;
+    } else {
+      float td = t - t_accel - t_cruise;
+      pos = d_accel + peak_speed * t_cruise + peak_speed * td -
+            0.5f * accel_cps2 * td * td;
     }
 
-  } else if (target_count > current_count) {
-    // Move smoothly upwards
+    if (pos > distance) pos = distance;
 
-    for (int i = current_count; i <= target_count; i++) {
-      PCA9685_SetServoPulseCounts(&hi2c2, motor_channel, i);
+    int desired_count = start_count + (int)lroundf(direction * pos);
+    desired_count = servo_limit_count(channel, desired_count);
 
-      HAL_Delay(25);  // Adjust delay for smoother or faster movement
+    if (desired_count != last_sent) {
+      if (servo_write_count(channel, desired_count) != HAL_OK) {
+        print_status_and_halt("ERROR: PCA9685 write failed during motion\r\n");
+      }
+      last_sent = desired_count;
+    }
+
+    HAL_Delay((uint32_t)MOTION_DT_MS);
+    t += dt_s;
+  }
+
+  if (servo_write_count(channel, final_target) != HAL_OK) {
+    print_status_and_halt("ERROR: PCA9685 final write failed\r\n");
+  }
+
+  s->current_count = final_target;
+}
+
+void servo_write_all_centers(void) {
+  for (int i = 0; i < 4; i++) {
+    servos[i].current_count = servos[i].center_count;
+    if (servo_write_count(i, servos[i].center_count) != HAL_OK) {
+      print_status_and_halt("ERROR: Failed to write center position\r\n");
     }
   }
+}
+
+/* Piecewise linear logical angle -> count.
+   center count = 0 deg
+   min side = negative angle
+   max side = positive angle */
+int logical_angle_deg_to_count(int channel, float logical_angle_deg) {
+  ServoConfig* s = &servos[channel];
+  float min_deg = 0.0f;
+  float max_deg = 0.0f;
+  float count_f = (float)s->center_count;
+
+  if (channel == BASE_SERVO_MOTOR) {
+    min_deg = BASE_MIN_DEG;
+    max_deg = BASE_MAX_DEG;
+  } else if (channel == ARM_SERVO_MOTOR1) {
+    min_deg = SHOULDER_MIN_DEG;
+    max_deg = SHOULDER_MAX_DEG;
+  } else if (channel == ARM_SERVO_MOTOR2) {
+    min_deg = ELBOW_MIN_DEG;
+    max_deg = ELBOW_MAX_DEG;
+  } else {
+    return s->center_count;
+  }
+
+  if (logical_angle_deg >= 0.0f) {
+    float a = clamp_float(logical_angle_deg, 0.0f, max_deg);
+    float t = (max_deg == 0.0f) ? 0.0f : (a / max_deg);
+    count_f = (float)s->center_count +
+              t * ((float)s->max_count - (float)s->center_count);
+  } else {
+    float a = clamp_float(logical_angle_deg, min_deg, 0.0f);
+    float t = (min_deg == 0.0f) ? 0.0f : (a / min_deg);
+    count_f = (float)s->center_count +
+              t * ((float)s->min_count - (float)s->center_count);
+  }
+
+  return servo_limit_count(channel, (int)lroundf(count_f));
+}
+
+float count_to_logical_angle_deg(int channel, int count) {
+  ServoConfig* s = &servos[channel];
+  int limited = servo_limit_count(channel, count);
+
+  if (limited >= s->center_count) {
+    float t = ((float)limited - (float)s->center_count) /
+              ((float)s->max_count - (float)s->center_count);
+    if (channel == BASE_SERVO_MOTOR) return t * BASE_MAX_DEG;
+    if (channel == ARM_SERVO_MOTOR1) return t * SHOULDER_MAX_DEG;
+    if (channel == ARM_SERVO_MOTOR2) return t * ELBOW_MAX_DEG;
+  } else {
+    float t = ((float)limited - (float)s->center_count) /
+              ((float)s->center_count - (float)s->min_count);
+    if (channel == BASE_SERVO_MOTOR) return t * (-BASE_MIN_DEG);
+    if (channel == ARM_SERVO_MOTOR1) return t * (-SHOULDER_MIN_DEG);
+    if (channel == ARM_SERVO_MOTOR2) return t * (-ELBOW_MIN_DEG);
+  }
+
+  return 0.0f;
+}
+
+void move_arm_counts(int base_count, int shoulder_count, int elbow_count) {
+  move_servo_smooth_trapezoid(BASE_SERVO_MOTOR, base_count,
+                              DEFAULT_MAX_SPEED_CPS, DEFAULT_ACCEL_CPS2);
+  HAL_Delay(200);
+
+  move_servo_smooth_trapezoid(ARM_SERVO_MOTOR1, shoulder_count,
+                              DEFAULT_MAX_SPEED_CPS, DEFAULT_ACCEL_CPS2);
+  HAL_Delay(200);
+
+  move_servo_smooth_trapezoid(ARM_SERVO_MOTOR2, elbow_count,
+                              DEFAULT_MAX_SPEED_CPS, DEFAULT_ACCEL_CPS2);
+  HAL_Delay(300);
+}
+
+void claw_open(void) {
+  move_servo_smooth_trapezoid(CLAW_SERVO_MOTOR, CLAW_MAX_COUNT,
+                              DEFAULT_MAX_SPEED_CPS, DEFAULT_ACCEL_CPS2);
+  HAL_Delay(350);
+}
+
+void claw_close(void) {
+  move_servo_smooth_trapezoid(CLAW_SERVO_MOTOR, CLAW_MIN_COUNT,
+                              DEFAULT_MAX_SPEED_CPS, DEFAULT_ACCEL_CPS2);
+  HAL_Delay(350);
 }
 
 /* USER CODE END 0 */
@@ -340,8 +661,8 @@ int main(void)
   print_msg("PCA9685 PWM frequency set to 50 Hz for servos\r\n");
 
   // To track current counts for each motor so we can do smooth transitions
-  int current_counts[4] = {SERVO_CENTER_COUNT + 65, SERVO_CENTER_COUNT,
-                           SERVO_CENTER_COUNT, SERVO_CENTER_COUNT};
+  int current_counts[4] = {BASE_CENTER_COUNT, ARM1_CENTER_COUNT,
+                           ARM2_CENTER_COUNT, CLAW_CENTER_COUNT};
 
   // Step 0: Ensure we start perfectly at center instantly so we have a known
   // baseline
@@ -365,19 +686,109 @@ int main(void)
   /* USER CODE BEGIN WHILE */
 
   JoystickState joy1 = {0};
-  JoystickState joy2 = {0};
+  JoystickState joy2 = {0};  // after testing, joy2 x and y should be flipped in
+                             // usage to match expected directions
 
   while (1)
 
   {
+    // // test elbow motor again
+    // move_servo_smooth_trapezoid(ARM_SERVO_MOTOR2, ARM2_MAX_COUNT,
+    //                             DEFAULT_MAX_SPEED_CPS, DEFAULT_ACCEL_CPS2);
+    // HAL_Delay(1000);
+    // move_servo_smooth_trapezoid(ARM_SERVO_MOTOR2, ARM2_MIN_COUNT,
+    //                             DEFAULT_MAX_SPEED_CPS, DEFAULT_ACCEL_CPS2);
+    // HAL_Delay(1000);
+    // move_servo_smooth_trapezoid(ARM_SERVO_MOTOR2, ARM2_CENTER_COUNT,
+    //                             DEFAULT_MAX_SPEED_CPS, DEFAULT_ACCEL_CPS2);
+    // HAL_Delay(1000);
+
+    // Manual mode (joystick controls motors directly)
+
+    // 1. Read joystick states
     Joystick_Read(&joy1, J1_X_CHANNEL, J1_Y_CHANNEL, J1_SW_GPIO_Port,
                   J1_SW_Pin);
     Joystick_Read(&joy2, J2_X_CHANNEL, J2_Y_CHANNEL, J2_SW_GPIO_Port,
                   J2_SW_Pin);
 
-    Joystick_Print(&joy1, &joy2);
+    //    Joystick_Print(&joy1, &joy2);
 
-    HAL_Delay(80000);
+    // 2. Map joystick inputs to servo counts
+
+    // base and shoulder on joy1, elbow and claw on joy2
+
+    // for now if X > 0, go towards max count, if X < 0 go towards min count,
+    // if Y > 0 go towards max count, if Y < 0 go towards min count
+    int step_size =
+        70;  // counts to move per joystick press - adjust for sensitivity
+
+    // scale step by joystick deflection
+    int base_step =
+        step_size * (float)abs(joy1.x_norm) / (float)(JOY_MAX - JOY_DEADZONE);
+    int shoulder_step =
+        step_size * (float)abs(joy1.y_norm) / (float)(JOY_MAX - JOY_DEADZONE);
+    int elbow_step =
+        step_size * (float)abs(joy2.x_norm) / (float)(JOY_MAX - JOY_DEADZONE);
+    int claw_step =
+        step_size * (float)abs(joy2.y_norm) / (float)(JOY_MAX - JOY_DEADZONE);
+
+    // print base step and current count for debugging
+    //    char msg[100];
+    //    snprintf(msg, sizeof(msg), "Base step: %d, Current count: %d\r\n",
+    //             base_step, servos[BASE_SERVO_MOTOR].current_count);
+    //    print_msg(msg);
+
+    if (joy1.x_norm > JOY_DEADZONE) {
+      //   servos[BASE_SERVO_MOTOR].current_count += base_step;
+      move_servo_smooth_trapezoid(
+          BASE_SERVO_MOTOR, servos[BASE_SERVO_MOTOR].current_count + base_step,
+          DEFAULT_MAX_SPEED_CPS, DEFAULT_ACCEL_CPS2);
+    } else if (joy1.x_norm < -JOY_DEADZONE) {
+      //   servos[BASE_SERVO_MOTOR].current_count -= base_step;
+      move_servo_smooth_trapezoid(
+          BASE_SERVO_MOTOR, servos[BASE_SERVO_MOTOR].current_count - base_step,
+          DEFAULT_MAX_SPEED_CPS, DEFAULT_ACCEL_CPS2);
+    }
+
+    if (joy1.y_norm > JOY_DEADZONE) {
+      //   servos[ARM_SERVO_MOTOR1].current_count += shoulder_step;
+      move_servo_smooth_trapezoid(
+          ARM_SERVO_MOTOR1,
+          servos[ARM_SERVO_MOTOR1].current_count + shoulder_step,
+          DEFAULT_MAX_SPEED_CPS, DEFAULT_ACCEL_CPS2);
+    } else if (joy1.y_norm < -JOY_DEADZONE) {
+      //   servos[ARM_SERVO_MOTOR1].current_count -= shoulder_step;
+      move_servo_smooth_trapezoid(
+          ARM_SERVO_MOTOR1,
+          servos[ARM_SERVO_MOTOR1].current_count - shoulder_step,
+          DEFAULT_MAX_SPEED_CPS, DEFAULT_ACCEL_CPS2);
+    }
+
+    if (joy2.x_norm > JOY_DEADZONE) {
+      //   servos[ARM_SERVO_MOTOR2].current_count += elbow_step;
+      move_servo_smooth_trapezoid(
+          ARM_SERVO_MOTOR2, servos[ARM_SERVO_MOTOR2].current_count + elbow_step,
+          DEFAULT_MAX_SPEED_CPS, DEFAULT_ACCEL_CPS2);
+    } else if (joy2.x_norm < -JOY_DEADZONE) {
+      //   servos[ARM_SERVO_MOTOR2].current_count -= elbow_step;
+      move_servo_smooth_trapezoid(
+          ARM_SERVO_MOTOR2, servos[ARM_SERVO_MOTOR2].current_count - elbow_step,
+          DEFAULT_MAX_SPEED_CPS, DEFAULT_ACCEL_CPS2);
+    }
+
+    if (joy2.y_norm > JOY_DEADZONE) {
+      //   servos[CLAW_SERVO_MOTOR].current_count += claw_step;
+      move_servo_smooth_trapezoid(
+          CLAW_SERVO_MOTOR, servos[CLAW_SERVO_MOTOR].current_count + claw_step,
+          DEFAULT_MAX_SPEED_CPS, DEFAULT_ACCEL_CPS2);
+    } else if (joy2.y_norm < -JOY_DEADZONE) {
+      //   servos[CLAW_SERVO_MOTOR].current_count -= claw_step;
+      move_servo_smooth_trapezoid(
+          CLAW_SERVO_MOTOR, servos[CLAW_SERVO_MOTOR].current_count - claw_step,
+          DEFAULT_MAX_SPEED_CPS, DEFAULT_ACCEL_CPS2);
+    }
+
+    // HAL_Delay(100);
 
     /* USER CODE END WHILE */
 
