@@ -4,6 +4,7 @@
 #include "main.h"
 #include <stdint.h>
 
+// uses an internal 25 MHz oscillator by default
 #define PCA9685_OSC_CLOCK      25000000UL
 
 // 7-bit base address is 0x40 when A0..A5 are all LOW.
@@ -29,6 +30,7 @@
 #define PCA9685_ALL_LED_OFF_H  0xFD
 #define PCA9685_PRE_SCALE      0xFE
 
+// MODE1: controls sleep, restart, auto-increment, external clock, etc.
 // MODE1 bits
 #define PCA9685_MODE1_ALLCALL  0x01
 #define PCA9685_MODE1_SUB3     0x02
@@ -39,6 +41,7 @@
 #define PCA9685_MODE1_EXTCLK   0x40
 #define PCA9685_MODE1_RESTART  0x80
 
+// MODE2: controls output structure and output update behavior.
 // MODE2 bits
 #define PCA9685_MODE2_OUTNE_0  0x01
 #define PCA9685_MODE2_OUTNE_1  0x02
